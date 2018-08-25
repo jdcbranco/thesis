@@ -61,7 +61,7 @@ quantiles2 = [quantile(dist2,i) for i in 0.0:0.02:0.99]
 
 rᵃ(x) = rich(x) ? quantiles2 : quantiles1
 rᵇ(x) = cheap(x) ? quantiles2 : quantiles1
-
+ 
 #basis functions
 ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2, h(x)^2, log(s(x)),
         s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh((q(x)+h(x))/1000)]
