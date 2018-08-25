@@ -3,12 +3,14 @@ using ForwardDiff
 using JuMP
 using NLopt
 using Plots
-using StatPlots
+#using StatPlots
+using GR
 using DataFrames
 using MultivariateStats
 using GLMNet
-#Feature matrix
 using Flux:batch
+
+gr() #Use GR backend for Plots
 
 θ = 0.05 #speed of reversion to mean in OU process
 ς = 0.02 #ETF vol
@@ -61,39 +63,25 @@ quantiles2 = [quantile(dist2,i) for i in 0.0:0.02:0.99]
 
 rᵃ(x) = rich(x) ? quantiles2 : quantiles1
 rᵇ(x) = cheap(x) ? quantiles2 : quantiles1
- 
+
 #basis functions
 ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2, h(x)^2, log(s(x)),
-        s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh((q(x)+h(x))/1000)]
-ϕ_π(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2, h(x)^2, log(s(x)),
-s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh((q(x)+h(x))/1000)]
-#model parameters
-#if(!isdefined(:θᵛ))
+        s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
+
 θᵛ = zeros(length(ϕ(ones(5))))
-θᵃ = zeros(length(ϕ_π(ones(5))))
-θᵇ = zeros(length(ϕ_π(ones(5))))
-θʷ = zeros(length(ϕ_π(ones(5))))
-Mᵛ = ones(length(5))
-Mᵃ = ones(length(5))
-Mᵇ = ones(length(5))
-Mʷ = ones(length(5))
-#end
+θᵃ = zeros(length(ϕ(ones(5))))
+θᵇ = zeros(length(ϕ(ones(5))))
+θʷ = zeros(length(ϕ(ones(5))))
 
 #Function approximations
-V(x) =  sum(θᵛ .* ϕ(Mᵛ.*x))
-δᵃ(x) = sum(θᵃ .* ϕ_π(Mᵃ.*x))
-δᵇ(x) = sum(θᵇ .* ϕ_π(Mᵇ.*x))
-ξ(x) =  sum(θʷ .* ϕ_π(Mʷ.*x))
-
-V(x,θᵛ) =  sum(θᵛ .* ϕ(Mᵛ.*x))
-δᵃ(x,θᵃ) = sum(θᵃ .* ϕ_π(Mᵃ.*x))
-δᵇ(x,θᵇ) = sum(θᵇ .* ϕ_π(Mᵇ.*x))
-ξ(x,θʷ) =  sum(θʷ .* ϕ_π(Mʷ.*x))
-
-V(x,θᵛ,M) =  sum(θᵛ .* ϕ(M.*x))
-δᵃ(x,θᵃ,M) = sum(θᵃ .* ϕ_π(M.*x))
-δᵇ(x,θᵇ,M) = sum(θᵇ .* ϕ_π(M.*x))
-ξ(x,θʷ,M) =  sum(θʷ .* ϕ_π(M.*x))
+# V(x) =  sum(θᵛ .* ϕ(x))
+# δᵃ(x) = sum(θᵃ .* ϕ(x))
+# δᵇ(x) = sum(θᵇ .* ϕ(x))
+# ξ(x) =  sum(θʷ .* ϕ(x))
+V(x,θᵛ=θᵛ) =  sum(θᵛ .* ϕ(x))
+δᵃ(x,θᵃ=θᵃ) = sum(θᵃ .* ϕ(x))
+δᵇ(x,θᵇ=θᵇ) = sum(θᵇ .* ϕ(x))
+ξ(x,θʷ=θʷ) =  sum(θʷ .* ϕ(x))
 
 #Reward function partial derivatives
 ∇R(x) = ForwardDiff.gradient(R,x)
@@ -118,9 +106,6 @@ V(x,θᵛ,M) =  sum(θᵛ .* ϕ(M.*x))
 ∂∂Vss(x) = ∇²V(x)[2,2]
 ∂∂Vpp(x) = ∇²V(x)[3,3]
 ∂∂Vsp(x) = ∇²V(x)[2,3]
-#
-# R(y,s,p,q,h) = R([y,s,p,q,h])
-# V(y,s,p,q,h) = V([y,s,p,q,h])
 
 #Value ingredients
 Δᵃ(x,δᵃ,rᵃ) = [y(x) + (rᵃ>=δᵃ ? s(x)*(1+δᵃ) : 0), s(x) + s(x)*rᵃ, p(x) + s(x)*rᵃ, q(x) + (rᵃ>=δᵃ ? -1 : 0), h(x)]
@@ -133,6 +118,7 @@ EΔᵃV(x,δᵃ) = mean([ΔᵃV(x,δᵃ,r) for r in rᵃ(x)])
 EΔᵇV(x,δᵇ) = mean([ΔᵇV(x,δᵇ,r) for r in rᵇ(x)])
 EΔᵃᵖV(x) = mean([ΔᵃᵖV(x,r) for r in rᵃ(x)])
 EΔᵇᵖV(x) = mean([ΔᵇᵖV(x,r) for r in rᵇ(x)])
+
 #Reward ingredients
 ΔᵃR(x,δᵃ,rᵃ) = R(Δᵃ(x,δᵃ,rᵃ)) - R(x)
 ΔᵇR(x,δᵇ,rᵇ) = R(Δᵇ(x,δᵇ,rᵇ)) - R(x)
@@ -238,17 +224,7 @@ function simulate(x₀;N=1000,T=1)
     [[S[i],P[i],r_a[i],r_b[i],r_ap[i],r_bp[i]] for i in 2:length(S)]
 end
 
-simulation1 = simulate(x₀)
 
-df = DataFrame()
-df[:s] = [x[1] for x in simulation1]
-df[:p] = [x[2] for x in simulation1]
-df[:r_a] = [x[3] for x in simulation1]
-df[:r_b] = [x[4] for x in simulation1]
-df[:r_ap] = [x[5] for x in simulation1]
-df[:r_bp] = [x[6] for x in simulation1]
-plot(df[:s],label="Price")
-gui()
 
 function total_reward(x₀;N=1000,T=1,Simulations=500,Safe=true)
     Δt = 1/N
@@ -305,17 +281,12 @@ function total_reward(x₀;N=1000,T=1,Simulations=500,Safe=true)
 end
 
 
-
 X_support = [randx_support(19);[x₀]]
-ϕ_π_X_support = ϕ_π.(X_support)
-ϕ_π_X_data_support = permutedims(batch(ϕ_π_X_support))
 ϕ_X_support = ϕ.(X_support)
 ϕ_X_data_support = permutedims(batch(ϕ_X_support))
 V_support = R.(X_support)
 
 X_sample = randx(100)
-ϕ_π_X = ϕ_π.(X_sample)
-ϕ_π_X_data = permutedims(batch(ϕ_π_X))
 ϕ_X = ϕ.(X_sample)
 ϕ_X_data = permutedims(batch(ϕ_X))
 
@@ -335,22 +306,22 @@ for iter = 1:15
     δᵇ_data = maxδᵇ.(X_sample)
     ξ_data = maxξ.(X_sample)
 
-    #new_θᵃlasso = glmnetcv(ϕ_π_X_data,δᵃ_data)
+    #new_θᵃlasso = glmnetcv(ϕ_X_data,δᵃ_data)
     #new_θᵃlasso_i = argmin(new_θᵃlasso.meanloss)
     #new_θᵃ = new_θᵃlasso.path.betas[:,new_θᵃlasso_i]
-    new_θᵃ = ridge(ϕ_π_X_data,δᵃ_data,0.15;bias=false)
+    new_θᵃ = ridge(ϕ_X_data,δᵃ_data,0.15;bias=false)
     new_δᵃ_data = [δᵃ(x,new_θᵃ) for x in X_sample]
 
-    #new_θᵇlasso = glmnetcv(ϕ_π_X_data,δᵇ_data)
+    #new_θᵇlasso = glmnetcv(ϕ_X_data,δᵇ_data)
     #new_θᵇlasso_i = argmin(new_θᵇlasso.meanloss)
     #new_θᵇ = new_θᵇlasso.path.betas[:,new_θᵇlasso_i]
-    new_θᵇ = ridge(ϕ_π_X_data,δᵇ_data,0.15;bias=false)
+    new_θᵇ = ridge(ϕ_X_data,δᵇ_data,0.15;bias=false)
     new_δᵇ_data = [δᵇ(x,new_θᵇ) for x in X_sample]
 
-    #new_θʷlasso = glmnetcv(ϕ_π_X_data,ξ_data)
+    #new_θʷlasso = glmnetcv(ϕ_X_data,ξ_data)
     #new_θʷlasso_i = argmin(new_θʷlasso.meanloss)
     #new_θʷ = new_θʷlasso.path.betas[:,new_θʷlasso_i]
-    new_θʷ = ridge(ϕ_π_X_data,ξ_data,0.15;bias=false)
+    new_θʷ = ridge(ϕ_X_data,ξ_data,0.15;bias=false)
     new_ξ_data = [ξ(x,new_θʷ) for x in X_sample]
 
     policy_error = sqrt(mean((new_δᵃ_data .- δᵃ_data) .^2)),  sqrt(mean((new_δᵇ_data .- δᵇ_data) .^2)), sqrt(mean((new_ξ_data .- ξ_data) .^2))
@@ -378,6 +349,8 @@ for iter = 1:15
     println("Iteration $(iter): policy_error is ",mean(policy_error)," while value_error is $(V_error)")
 
     current_reward = total_reward(x₀)
+    println("Total reward: ",current_reward)
+
     if current_reward > best_reward
         best_θᵃ = θᵃ
         best_θᵇ = θᵇ
@@ -389,42 +362,61 @@ for iter = 1:15
         V_support = total_reward.(X_support)
     end
 
-    println("Total reward: ",current_reward)
-
+    #New samples
     new_X_sample = randx(10)
     X_sample = [X_sample; new_X_sample]
-    ϕ_π_X = [ϕ_π_X; ϕ_π.(new_X_sample)]
-    ϕ_π_X_data = permutedims(batch(ϕ_π_X))
     ϕ_X = [ϕ_X; ϕ.(new_X_sample)]
     ϕ_X_data = permutedims(batch(ϕ_X))
 end
 
 Rvalues  = [R(x₀+[-100i,0,0,i,0]) for i in -100000:10:100000]
-#Rvalues2  = [R(x₀+[-100*1000,i,0,1000,0]) for i in -10:0.01:10]
+#Rvalues  = [R(x₀+[-100*1000,i,0,1000,0]) for i in -10:0.01:10]
+plot(Rvalues, label="utility")
+
 Vvalues  = [V(x₀+[0,0,0,i,0]) for i in -100000:10:100000]
-δᵃvalues = [δᵃ(x₀+[0,0,0,i,0]) for i in -2000:5:2000]
-δᵇvalues = [δᵇ(x₀+[0,0,0,i,0]) for i in -2000:5:2000]
-plot([δᵃvalues,δᵇvalues],label=["offer pfa","bid pfa"])
+plot(Vvalues, label="value")
 
-maxδᵃvalues = [maxδᵃ(x₀+[-100i,0,0,i,0]) for i in -2000:5:2000]
-maxδᵇvalues = [maxδᵇ(x₀+[-100i,0,0,i,0]) for i in -2000:5:2000]
-plot([maxδᵃvalues,maxδᵇvalues],label=["offer vfa","bid vfa"])
+δᵃvalues = [δᵃ(x₀+[0,0,0,i,0]) for i in -2000:1:2000]
+δᵇvalues = [δᵇ(x₀+[0,0,0,i,0]) for i in -2000:1:2000]
+plot([-2000:1:2000],[δᵃvalues,δᵇvalues],label=["offer pfa","bid pfa"])
 
-plot([δᵃvalues,maxδᵃvalues],label=["offer pfa","offer vfa"])
+maxδᵃvalues = [maxδᵃ(x₀+[0,0,0,i,0]) for i in -2000:1:2000]
+maxδᵇvalues = [maxδᵇ(x₀+[0,0,0,i,0]) for i in -2000:1:2000]
+plot([-2000:1:2000],[maxδᵃvalues,maxδᵇvalues],label=["offer vfa","bid vfa"])
+
+#Plot comparisons between PFA and VFA policies
+plot([-2000:1:2000],[δᵃvalues,maxδᵃvalues],label=["offer pfa","offer vfa"])
+plot([-2000:1:2000],[δᵇvalues,maxδᵇvalues],label=["bid pfa","bid vfa"])
 
 
 ξvalues = [ξ(x₀+[0,0,0,i,0]) for i in -1000:1:1000]
+plot(ξvalues, label="hedge pfa")
+
+maxξvalues = [maxξ(x₀+[0,0,0,i,0]) for i in -2000:1:2000]
+plot([-2000:1:2000],maxξvalues, label="hedge vfa")
+
+# simulation1 = simulate(x₀)
+# df = DataFrame()
+# df[:s] = [x[1] for x in simulation1]
+# df[:p] = [x[2] for x in simulation1]
+# df[:r_a] = [x[3] for x in simulation1]
+# df[:r_b] = [x[4] for x in simulation1]
+# df[:r_ap] = [x[5] for x in simulation1]
+# df[:r_bp] = [x[6] for x in simulation1]
+# plot(df[:s],label="Price")
 
 
-plot(ξvalues, label="hedge")
-plot(Rvalues, label="utility")
-plot(Vvalues, label="value")
-oldθᵃ=θᵃ
-oldθᵇ=θᵇ
-oldθʷ=θʷ
-oldθᵛ=θᵛ
+Vvalues1 = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
+Vvalues2 = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
+Vvalues3 = vcat([V(x₀+[0,0,0,x,y]) for x in -2000:100:2000, y in -2000:100:2000]...)
+surface(Vvalues1,Vvalues2,Vvalues3)
 
-θᵃ=best_θᵃ
-θᵇ=best_θᵇ
-θʷ=best_θʷ
-θᵛ=best_θᵛ
+# oldθᵃ=θᵃ
+# oldθᵇ=θᵇ
+# oldθʷ=θʷ
+# oldθᵛ=θᵛ
+#
+# θᵃ=best_θᵃ
+# θᵇ=best_θᵇ
+# θʷ=best_θʷ
+# θᵛ=best_θᵛ
