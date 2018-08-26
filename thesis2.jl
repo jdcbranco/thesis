@@ -3,7 +3,7 @@
 if something(findfirst(isequal("./"),LOAD_PATH),0) == 0
     push!(LOAD_PATH, "./")
 end
-#using Distributions
+using Distributions
 using ForwardDiff
 using JuMP
 using NLopt
@@ -138,7 +138,8 @@ maxδᵇ(θ,x) = 0.0001*argmax([EΔᵇV(θ,x,δ)+EΔᵇR(x,δ) for δ in 0.0001:
 maxξ(θ,x)  = validξ(q(x),h(x))[argmax([V(θ,Γ(x,ξ)) for ξ in validξ(q(x),h(x))])]
 
 function V_estimate(θ,x)
-    V(θ,x) + max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
+    #V(θ,x) + max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
+    R(x)
 end
 
 function total_reward(x₀;θᵃ=θᵃ,θᵇ=θᵇ,θʷ=θʷ,N=1000,T=1,Simulations=500,Safe=true)
@@ -201,7 +202,7 @@ X_support = [randx(19;support=true);[x₀]]
 ϕ_X_data_support = permutedims(batch(ϕ_X_support))
 V_support = R.(X_support)
 
-X_sample = randx(100)
+X_sample = randx(10)
 ϕ_X = ϕ.(X_sample)
 ϕ_X_data = permutedims(batch(ϕ_X))
 
@@ -239,42 +240,54 @@ function maxξ(θ)
 end
 
 function V_estimate(θ)
-    mean([V_estimate(θ,x) for x in X_sample])
+    vcat([V_estimate(θ,x) for x in X_sample]...)
 end
 
 function V_bar(θ)
-    mean([V(θ,x) for x in X_sample])
+    vcat([V(θ,x) for x in X_sample]...)
 end
 
 function V_constraint1(θ)
-    sum([∇Vx(θ,x) .* ∇R(x) for x in X_sample])
+    vcat([∇Vx(θ,x) .* ∇R(x) for x in X_sample]...)
 end
 
+# function second_order_condition(grad1,grad2)
+#     [(grad1[i]-grad1[j])*(min(grad2[i]-grad2[j],grad2[i]+grad2[j])) for i in 1:5 for j in i:5 if i!=j]
+# end
 function second_order_condition(grad1,grad2)
-    [(grad1[i]-grad1[j])*(min(grad2[i]-grad2[j],grad2[i]+grad2[j])) for i in 1:5 for j in i:5 if i!=j]
+    [grad1[i]*grad2[i] + grad1[j]*grad2[j] - abs(grad1[i]*grad2[j]+grad1[j]*grad2[i]) for i in 1:5 for j in i:5 if i!=j]
+end
+
+function third_order_condition(grad1, grad2)
+    [grad1[i]*grad2[i] + grad1[j]*grad2[j] + grad1[k]*grad2[k] - abs(grad1[i]*grad2[j]+grad1[j]*grad2[i]) - abs(grad1[i]*grad2[k]+grad1[k]*grad2[i]) - abs(grad1[k]*grad2[j]+grad1[j]*grad2[k]) for i in 1:5 for j in i:5 for k in 1:5 if i<j && j<k]
 end
 
 function V_constraint2(θ)
-    sum([second_order_condition(∇Vx(θ,x),∇R(x)) for x in X_sample])
+    vcat([second_order_condition(∇Vx(θ,x),∇R(x)) for x in X_sample]...)
+end
+
+function V_constraint3(θ)
+    vcat([third_order_condition(∇Vx(θ,x),∇R(x)) for x in X_sample]...)
 end
 
 #Lagrangian objective
 function objective(z)
     θ = z[1:length(θᵛ)]
-    λ₁ = z[length(θᵛ)+1:length(θᵛ)+5]
-    λ₂ = z[length(θᵛ)+6:length(θᵛ)+15]
-    (V_estimate(θ)-V_bar(θ))^2 - λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) + sum(z.^2) #this is a penalty/regularization
+    λ₁ = z[length(θᵛ)+1:length(θᵛ)+5*length(X_sample)]
+    λ₂ = z[length(θᵛ)+1+5*length(X_sample):length(θᵛ)+15*length(X_sample)]
+    λ₃ = z[length(θᵛ)+1+15*length(X_sample):length(θᵛ)+25*length(X_sample)]
+    mean((V_estimate(θ)-V_bar(θ)).^2) #- λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) + sum(θ.^2) -sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
 end
-objective(θ,λ₁,λ₂) = objective([θ;λ₁;λ₂])
-∇objective(θ,λ₁,λ₂) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂])[1:length(θᵛ)]
+objective(θ,λ₁,λ₂,λ₃) = objective([θ;λ₁;λ₂;λ₃])
+∇objective(θ,λ₁,λ₂,λ₃) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂;λ₃])[1:length(θᵛ)]
 
-function minimize_lagrangian(θ₀,λ₁,λ₂;gradient_step = 0.000000002,n_iter = 40)
+function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002,n_iter = 40)
     F = zeros(n_iter)
     θ = [θ₀ for x in 1:n_iter]
     for iter = 1:n_iter
-        F[iter] = objective(θ[iter],λ₁,λ₂)
+        F[iter] = objective(θ[iter],λ₁,λ₂,λ₃)
         if iter>1
-            if F[iter]>F[iter-1]
+            if F[iter]>F[iter-1] && iter>3
                 println("> F[$iter] is worse than F[$(iter-1)]: $(F[iter]) > $(F[iter-1])")
                 return F[iter-1],θ[iter-1]
             elseif iter==n_iter
@@ -283,36 +296,80 @@ function minimize_lagrangian(θ₀,λ₁,λ₂;gradient_step = 0.000000002,n_ite
                 gradient_step *= 1.25
             end
         end
-        θ[iter+1] = θ[iter] - gradient_step * ∇objective(θ[iter],λ₁,λ₂)
+        θ[iter+1] = θ[iter] - gradient_step * ∇objective(θ[iter],λ₁,λ₂,λ₃)
         println("> Objective F(θ[$iter])): $(F[iter])")
     end
 end
-function solve_problem(θ₀;n_outer_iter = 5,n_inner_iter=5,gradient_step = 0.000000002,adjoint_step=0.000000002)
+
+function solve_problem(θ₀;
+    n_outer_iter = 5, n_inner_iter = 5, gradient_step = 0.000000002, adjoint_step=0.000000002)
     #Lagrange multipliers
-    λ₁ = zeros(5)
-    λ₂ = zeros(10)
+    λ₁ = ones(5*length(X_sample))
+    λ₂ = ones(10*length(X_sample))
+    λ₃ = ones(10*length(X_sample))
     F = zeros(n_outer_iter)
     θ = [θ₀ for x in 1:n_outer_iter]
     for iter = 1:n_outer_iter
         println("Iteration $iter:")
-        F[iter], θ[iter] = minimize_lagrangian(θ[iter],λ₁,λ₂;gradient_step=gradient_step,n_iter=n_inner_iter)
+        F[iter], θ[iter] = minimize_lagrangian(θ[iter],λ₁,λ₂,λ₃;gradient_step=gradient_step,n_iter=n_inner_iter)
         λ₁ += adjoint_step * V_constraint1(θ[iter])
         λ₂ += adjoint_step * V_constraint2(θ[iter])
+        λ₃ += adjoint_step * V_constraint3(θ[iter])
         println("Best F[$iter] = $(F[iter]) ")
 
         if iter>1
             if F[iter] > F[iter-1]
                 println("F[$iter] is worse than F[$(iter-1)]: $(F[iter]) > $(F[iter-1])")
                 return θ[iter-1]
-            else iter==n_outer_iter
+            elseif iter==n_outer_iter
                 return θ[iter]
             end
         end
         θ[iter+1] = θ[iter]
     end
-    last(θ)
 end
 
-θᵛ = zeros(length(ϕ(ones(5))))
+θᵛ = ones(length(ϕ(ones(5))))
+for iter = 1:5
+    θᵛ = solve_problem(θᵛ,gradient_step = 0.00000000002)
+    println("V(x₀) = ",V(θᵛ,x₀))
+    #Replace half of the samples
+    X_sample = [sample(X_sample,5); randx(5)]
+    ϕ_X_data = permutedims(batch(ϕ.(X_sample)))
+end
 
-θᵛ = solve_problem(θᵛ,gradient_step = 0.00000000002)
+vfapolicy = DataFrame()
+vfapolicy[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:bid] = vcat([maxδᵇ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:offer] = vcat([maxδᵃ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:value] = vcat([V(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:utility] = vcat([R(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:wealth] = vcat([v(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:bid], title="bid")
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:offer],  title="offer")
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:utility], title="utility")
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
+#
+# vfapolicy2 = DataFrame()
+# vfapolicy2[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:bid] = vcat([maxδᵇ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:offer] = vcat([maxδᵃ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:value] = vcat([V(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:utility] = vcat([R(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+# vfapolicy2[:wealth] = vcat([v(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+#
+# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:value], title="value2")
+# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:bid], title="bid2")
+# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:offer],  title="offer2")
+# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:utility], title="utility2")
+# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:wealth], title="wealth2")
+#
+# dfcash = DataFrame()
+# dfcash[:cash0] = [maxδᵇ(θᵛ,x₀+[0,x,0,0,0]) for x in 10:1:200]
+# dfcash[:cash1] = [maxδᵇ(θᵛ,x₀+[0,x,0,-10000,0]) for x in 10:1:200]
+# plot(hcat(dfcash[:cash0],dfcash[:cash1]))
+#

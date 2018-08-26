@@ -32,8 +32,11 @@ rich(x) = rich(p(x),s(x))
 #Wealth function
 v(x) =  y(x) + q(x)*s(x) + h(x)*(s(x)-p(x))
 #Utility function
+# function R(x)
+#     y(x) + (q(x)*s(x) + h(x)*(s(x)-p(x)))*exp(-(q(x)*s(x) + h(x)*(s(x)-p(x)))*10^-6)
+# end
 function R(x)
-    y(x) + (q(x)*s(x) + h(x)*(s(x)-p(x)))*exp(-(q(x)*s(x) + h(x)*(s(x)-p(x)))*10^-6)
+    v(x)
 end
 
 #Jump amplitude distributions
