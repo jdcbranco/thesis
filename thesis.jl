@@ -2,15 +2,13 @@ using Distributions
 using ForwardDiff
 using JuMP
 using NLopt
-using Plots
-#using StatPlots
 using GR
 using DataFrames
 using MultivariateStats
 using GLMNet
 using Flux:batch
+using DelimitedFiles
 
-gr() #Use GR backend for Plots
 
 θ = 0.05 #speed of reversion to mean in OU process
 ς = 0.02 #ETF vol
@@ -280,7 +278,6 @@ function total_reward(x₀;N=1000,T=1,Simulations=500,Safe=true)
     reward/N
 end
 
-
 X_support = [randx_support(19);[x₀]]
 ϕ_X_support = ϕ.(X_support)
 ϕ_X_data_support = permutedims(batch(ϕ_X_support))
@@ -306,21 +303,12 @@ for iter = 1:15
     δᵇ_data = maxδᵇ.(X_sample)
     ξ_data = maxξ.(X_sample)
 
-    #new_θᵃlasso = glmnetcv(ϕ_X_data,δᵃ_data)
-    #new_θᵃlasso_i = argmin(new_θᵃlasso.meanloss)
-    #new_θᵃ = new_θᵃlasso.path.betas[:,new_θᵃlasso_i]
     new_θᵃ = ridge(ϕ_X_data,δᵃ_data,0.15;bias=false)
     new_δᵃ_data = [δᵃ(x,new_θᵃ) for x in X_sample]
 
-    #new_θᵇlasso = glmnetcv(ϕ_X_data,δᵇ_data)
-    #new_θᵇlasso_i = argmin(new_θᵇlasso.meanloss)
-    #new_θᵇ = new_θᵇlasso.path.betas[:,new_θᵇlasso_i]
     new_θᵇ = ridge(ϕ_X_data,δᵇ_data,0.15;bias=false)
     new_δᵇ_data = [δᵇ(x,new_θᵇ) for x in X_sample]
 
-    #new_θʷlasso = glmnetcv(ϕ_X_data,ξ_data)
-    #new_θʷlasso_i = argmin(new_θʷlasso.meanloss)
-    #new_θʷ = new_θʷlasso.path.betas[:,new_θʷlasso_i]
     new_θʷ = ridge(ϕ_X_data,ξ_data,0.15;bias=false)
     new_ξ_data = [ξ(x,new_θʷ) for x in X_sample]
 
@@ -330,12 +318,7 @@ for iter = 1:15
     θᵇ = learning_best*best_θᵇ + (1-learning_rate-learning_best)*θᵇ + learning_rate * new_θᵇ
     θʷ = learning_best*best_θʷ + (1-learning_rate-learning_best)*θʷ + learning_rate * new_θʷ
 
-    function V_estimate_MC(x)
-        total_reward(x)
-    end
-
     V_data = V_estimate.(X_sample)
-    #new_θᵛlasso = glmnetcv(ϕ_X_data,V_support)
     new_θᵛlasso = glmnetcv([ϕ_X_data;ϕ_X_data_support],[V_data;V_support])
     new_θᵛlasso_i = argmin(new_θᵛlasso.meanloss)
     new_θᵛ = new_θᵛlasso.path.betas[:,new_θᵛlasso_i]
@@ -388,7 +371,6 @@ plot([-2000:1:2000],[maxδᵃvalues,maxδᵇvalues],label=["offer vfa","bid vfa"
 plot([-2000:1:2000],[δᵃvalues,maxδᵃvalues],label=["offer pfa","offer vfa"])
 plot([-2000:1:2000],[δᵇvalues,maxδᵇvalues],label=["bid pfa","bid vfa"])
 
-
 ξvalues = [ξ(x₀+[0,0,0,i,0]) for i in -1000:1:1000]
 plot(ξvalues, label="hedge pfa")
 
@@ -405,18 +387,30 @@ plot([-2000:1:2000],maxξvalues, label="hedge vfa")
 # df[:r_bp] = [x[6] for x in simulation1]
 # plot(df[:s],label="Price")
 
+vfapolicy = DataFrame()
+vfapolicy[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:bid] = vcat([maxδᵇ(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:offer] = vcat([maxδᵃ(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:value] = vcat([V(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+
+open("offer_vfa_policy.dat", "w") do io
+    writedlm(io, [vfapolicy[:q] vfapolicy[:h] vfapolicy[:offer]])
+end
+open("bid_vfa_policy.dat", "w") do io
+    writedlm(io, [vfapolicy[:q] vfapolicy[:h] vfapolicy[:bid]])
+end
+open("vfa.dat", "w") do io
+    writedlm(io, [vfapolicy[:q] vfapolicy[:h] vfapolicy[:value]])
+end
 
 Vvalues1 = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
 Vvalues2 = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
-Vvalues3 = vcat([V(x₀+[0,0,0,x,y]) for x in -2000:100:2000, y in -2000:100:2000]...)
+Vvalues3 = vcat([V(x₀+[-100*(x+y),0,0,x,y]) for x in -2000:100:2000, y in -2000:100:2000]...)
 surface(Vvalues1,Vvalues2,Vvalues3)
 
-# oldθᵃ=θᵃ
-# oldθᵇ=θᵇ
-# oldθʷ=θʷ
-# oldθᵛ=θᵛ
-#
-# θᵃ=best_θᵃ
-# θᵇ=best_θᵇ
-# θʷ=best_θʷ
-# θᵛ=best_θᵛ
+δᵃvalues3 = vcat([δᵃ(x₀+[-100*(x+y),0,0,x,y]) for x in -2000:100:2000, y in -2000:100:2000]...)
+surface(Vvalues1,Vvalues2,δᵃvalues3)
+
+maxδᵃvalues3 = vcat([maxδᵃ(x₀+[-100*(x+y),0,0,x,y]) for x in -2000:100:2000, y in -2000:100:2000]...)
+surface(Vvalues1,Vvalues2,maxδᵃvalues3,title="test")
