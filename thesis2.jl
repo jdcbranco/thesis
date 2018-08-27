@@ -18,7 +18,7 @@ using Parameters
 using Simulator
 
 #Basis functions
-ϕ(x) = [v(x),(q(x)+h(x))*v(x), -v(x)^2]#[v(x), v(x)^2, p(x), p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
+ϕ(x) = [1, v(x)/20000,-(q(x)+h(x))*v(x)/20000, -(v(x)^2)/1e6, p(x)]#[v(x), v(x)^2, p(x), p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
         #tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
 # ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
 #                 s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
@@ -278,7 +278,7 @@ function objective(z)
     λ₁ = z[length(θᵛ)+1:length(θᵛ)+5*length(X_sample)]
     λ₂ = z[length(θᵛ)+1+5*length(X_sample):length(θᵛ)+15*length(X_sample)]
     λ₃ = z[length(θᵛ)+1+15*length(X_sample):length(θᵛ)+25*length(X_sample)]
-    mean((V_estimate(θ)-V_bar(θ)).^2) + 2* sum(abs.(θ)) - λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) -sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
+    mean((V_estimate(θ)-V_bar(θ)).^2) + 2* sum(abs.(θ)) - λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) #-sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
 end
 objective(θ,λ₁,λ₂,λ₃) = objective([θ;λ₁;λ₂;λ₃])
 ∇objective(θ,λ₁,λ₂,λ₃) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂;λ₃])[1:length(θᵛ)]
@@ -294,8 +294,8 @@ function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002
                 return F[iter-1],θ[iter-1]
             elseif iter==n_iter
                 return F[iter],θ[iter]
-            else
-                gradient_step *= 1.25
+            elseif gradient_step < 10^-5
+                gradient_step *= max(1,log(abs(F[iter])))
             end
         end
         θ[iter+1] = θ[iter] - gradient_step * ∇objective(θ[iter],λ₁,λ₂,λ₃)
@@ -304,7 +304,7 @@ function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002
 end
 
 function solve_problem(θ₀;
-    n_outer_iter = 10, n_inner_iter = 10, gradient_step = 0.00000000002, adjoint_step=0.000000002)
+    n_outer_iter = 10, n_inner_iter = 100, gradient_step = 0.00000000002, adjoint_step=0.025)
     #Lagrange multipliers
     λ₁ = ones(5*length(X_sample))
     λ₂ = ones(10*length(X_sample))
@@ -314,12 +314,20 @@ function solve_problem(θ₀;
     for iter = 1:n_outer_iter
         println("Iteration $iter:")
         F[iter], θ[iter] = minimize_lagrangian(θ[iter],λ₁,λ₂,λ₃;gradient_step=gradient_step,n_iter=n_inner_iter)
-        minλ_before = min([λ₁;λ₂;λ₃]...)
-        λ₁ += adjoint_step * V_constraint1(θ[iter])
-        λ₂ += adjoint_step * V_constraint2(θ[iter])
-        λ₃ += adjoint_step * V_constraint3(θ[iter])
+        minλ = min([λ₁;λ₂;λ₃]...)
+        c1 = V_constraint1(θ[iter])
+        c2 = V_constraint2(θ[iter])
+        c3 = V_constraint3(θ[iter])
+        minc = min([c1;c2;c3]...)
+        λ₁ += adjoint_step * minλ/minc * c1
+        λ₂ += adjoint_step * minλ/minc * c2
+        λ₃ += adjoint_step * minλ/minc * c3
+
         minλ_after = min([λ₁;λ₂;λ₃]...)
-        println("minλ_before = $minλ_before, minλ_after = $minλ_after")
+        λ₁ = max.(λ₁,zeros(length(λ₁)))
+        λ₂ = max.(λ₂,zeros(length(λ₂)))
+        λ₃ = max.(λ₃,zeros(length(λ₃)))
+        println("minλ_before = $minλ, minλ_after = $minλ_after")
         println("Best F[$iter] = $(F[iter]) ")
 
         if iter>1
@@ -328,7 +336,7 @@ function solve_problem(θ₀;
                 return θ[iter-1]
             elseif iter==n_outer_iter
                 return θ[iter]
-            else
+            elseif adjoint_step < 0.4
                 adjoint_step *= 2
             end
         end
@@ -338,7 +346,7 @@ end
 
 θᵛ = rand(length(ϕ(ones(5))))
 for iter = 1:20
-    θᵛ = solve_problem(θᵛ,gradient_step = 10^-20)
+    θᵛ = solve_problem(θᵛ,gradient_step = 10^-15)
     println("V(x₀) = ",V(θᵛ,x₀))
     #Replace half of the samples
     X_sample = [sample(X_sample,1); randx(2)]
@@ -361,23 +369,24 @@ surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:utility], title="utility")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
 
-#surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ([0.68,-0.9,-1.57],x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ([3100,22662,-1.86],x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
 
-#
-# vfapolicy2 = DataFrame()
-# vfapolicy2[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:bid] = vcat([maxδᵇ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:offer] = vcat([maxδᵃ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:value] = vcat([V(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:utility] = vcat([R(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
-# vfapolicy2[:wealth] = vcat([v(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
-#
-# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:value], title="value2")
-# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:bid], title="bid2")
-# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:offer],  title="offer2")
-# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:utility], title="utility2")
-# surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:wealth], title="wealth2")
+
+vfapolicy2 = DataFrame()
+vfapolicy2[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:bid] = vcat([maxδᵇ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:offer] = vcat([maxδᵃ(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:value] = vcat([V(θᵛ,x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:utility] = vcat([R(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy2[:wealth] = vcat([v(x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+
+surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:value], title="value2")
+surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:bid], title="bid2")
+surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:offer],  title="offer2")
+surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:utility], title="utility2")
+surface(vfapolicy2[:q],vfapolicy2[:h],vfapolicy2[:wealth], title="wealth2")
 #
 # dfcash = DataFrame()
 # dfcash[:cash0] = [maxδᵇ(θᵛ,x₀+[0,x,0,0,0]) for x in 10:1:200]
