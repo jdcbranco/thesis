@@ -3,6 +3,7 @@
 if something(findfirst(isequal("./"),LOAD_PATH),0) == 0
     push!(LOAD_PATH, "./")
 end
+using Distributed
 using Distributions
 using ForwardDiff
 using JuMP
@@ -147,7 +148,7 @@ end
 function total_reward(x₀;θᵃ=θᵃ,θᵇ=θᵇ,θʷ=θʷ,N=1000,T=1,Simulations=500,Safe=true)
     Δt = 1/N
     reward = 0
-    reward = @parallel (+) for i = 1:Simulations
+    reward = @distributed (+) for i = 1:Simulations
         reward_i = 0
         sim = simulate(x₀;N=N,T=T)
         t=1
@@ -278,7 +279,7 @@ function objective(z)
     λ₁ = z[length(θᵛ)+1:length(θᵛ)+5*length(X_sample)]
     λ₂ = z[length(θᵛ)+1+5*length(X_sample):length(θᵛ)+15*length(X_sample)]
     λ₃ = z[length(θᵛ)+1+15*length(X_sample):length(θᵛ)+25*length(X_sample)]
-    mean((V_estimate(θ)-V_bar(θ)).^2) + 2* sum(abs.(θ)) - λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) #-sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
+    mean((V_estimate(θ)-V_bar(θ)).^2) + 2* sum(abs.(θ)) #- λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) #-sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
 end
 objective(θ,λ₁,λ₂,λ₃) = objective([θ;λ₁;λ₂;λ₃])
 ∇objective(θ,λ₁,λ₂,λ₃) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂;λ₃])[1:length(θᵛ)]
@@ -358,6 +359,8 @@ vfapolicy[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:h] = vcat([x for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:bid] = vcat([maxδᵇ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:offer] = vcat([maxδᵃ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+vfapolicy[:hedge] = vcat([maxξ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
+
 vfapolicy[:value] = vcat([V(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:utility] = vcat([R(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:wealth] = vcat([v(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
@@ -365,6 +368,7 @@ vfapolicy[:wealth] = vcat([v(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000,
 #titles3d("x", "y", "z")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:bid], title="bid")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:offer],  title="offer")
+contour(vfapolicy[:q],vfapolicy[:h],vfapolicy[:hedge],  title="hedge")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:utility], title="utility")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
