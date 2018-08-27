@@ -18,8 +18,10 @@ using Parameters
 using Simulator
 
 #Basis functions
-ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2, h(x)^2, log(s(x)),
-        s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
+ϕ(x) = [v(x),(q(x)+h(x))*v(x), -v(x)^2]#[v(x), v(x)^2, p(x), p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
+        #tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
+# ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
+#                 s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
 
 #Function approximations
 V(θ,x) =  sum(θ .* ϕ(x))
@@ -138,8 +140,8 @@ maxδᵇ(θ,x) = 0.0001*argmax([EΔᵇV(θ,x,δ)+EΔᵇR(x,δ) for δ in 0.0001:
 maxξ(θ,x)  = validξ(q(x),h(x))[argmax([V(θ,Γ(x,ξ)) for ξ in validξ(q(x),h(x))])]
 
 function V_estimate(θ,x)
-    #V(θ,x) + max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
-    R(x)
+    V(θ,x) + max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
+    #R(x)
 end
 
 function total_reward(x₀;θᵃ=θᵃ,θᵇ=θᵇ,θʷ=θʷ,N=1000,T=1,Simulations=500,Safe=true)
@@ -202,7 +204,7 @@ X_support = [randx(19;support=true);[x₀]]
 ϕ_X_data_support = permutedims(batch(ϕ_X_support))
 V_support = R.(X_support)
 
-X_sample = randx(10)
+X_sample = randx(20)
 ϕ_X = ϕ.(X_sample)
 ϕ_X_data = permutedims(batch(ϕ_X))
 
@@ -212,7 +214,7 @@ learning_rate = 0.25
 learning_best = 0.50
 
 #Initial values for the function approximations parameters
-θᵛ = zeros(length(ϕ(ones(5))))
+θᵛ = rand(length(ϕ(ones(5))))
 θᵃ = zeros(length(ϕ(ones(5))))
 θᵇ = zeros(length(ϕ(ones(5))))
 θʷ = zeros(length(ϕ(ones(5))))
@@ -276,7 +278,7 @@ function objective(z)
     λ₁ = z[length(θᵛ)+1:length(θᵛ)+5*length(X_sample)]
     λ₂ = z[length(θᵛ)+1+5*length(X_sample):length(θᵛ)+15*length(X_sample)]
     λ₃ = z[length(θᵛ)+1+15*length(X_sample):length(θᵛ)+25*length(X_sample)]
-    mean((V_estimate(θ)-V_bar(θ)).^2) #- λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) + sum(θ.^2) -sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
+    mean((V_estimate(θ)-V_bar(θ)).^2) + 2* sum(abs.(θ)) - λ₁'*V_constraint1(θ) - λ₂'*V_constraint2(θ) - λ₃'*V_constraint3(θ) -sum(λ₁) -sum(λ₂) -sum(λ₃) #this is a penalty/regularization
 end
 objective(θ,λ₁,λ₂,λ₃) = objective([θ;λ₁;λ₂;λ₃])
 ∇objective(θ,λ₁,λ₂,λ₃) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂;λ₃])[1:length(θᵛ)]
@@ -287,7 +289,7 @@ function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002
     for iter = 1:n_iter
         F[iter] = objective(θ[iter],λ₁,λ₂,λ₃)
         if iter>1
-            if F[iter]>F[iter-1] && iter>3
+            if F[iter]>F[iter-1]
                 println("> F[$iter] is worse than F[$(iter-1)]: $(F[iter]) > $(F[iter-1])")
                 return F[iter-1],θ[iter-1]
             elseif iter==n_iter
@@ -302,7 +304,7 @@ function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002
 end
 
 function solve_problem(θ₀;
-    n_outer_iter = 5, n_inner_iter = 5, gradient_step = 0.000000002, adjoint_step=0.000000002)
+    n_outer_iter = 10, n_inner_iter = 10, gradient_step = 0.00000000002, adjoint_step=0.000000002)
     #Lagrange multipliers
     λ₁ = ones(5*length(X_sample))
     λ₂ = ones(10*length(X_sample))
@@ -312,9 +314,12 @@ function solve_problem(θ₀;
     for iter = 1:n_outer_iter
         println("Iteration $iter:")
         F[iter], θ[iter] = minimize_lagrangian(θ[iter],λ₁,λ₂,λ₃;gradient_step=gradient_step,n_iter=n_inner_iter)
+        minλ_before = min([λ₁;λ₂;λ₃]...)
         λ₁ += adjoint_step * V_constraint1(θ[iter])
         λ₂ += adjoint_step * V_constraint2(θ[iter])
         λ₃ += adjoint_step * V_constraint3(θ[iter])
+        minλ_after = min([λ₁;λ₂;λ₃]...)
+        println("minλ_before = $minλ_before, minλ_after = $minλ_after")
         println("Best F[$iter] = $(F[iter]) ")
 
         if iter>1
@@ -323,18 +328,20 @@ function solve_problem(θ₀;
                 return θ[iter-1]
             elseif iter==n_outer_iter
                 return θ[iter]
+            else
+                adjoint_step *= 2
             end
         end
         θ[iter+1] = θ[iter]
     end
 end
 
-θᵛ = ones(length(ϕ(ones(5))))
-for iter = 1:5
-    θᵛ = solve_problem(θᵛ,gradient_step = 0.00000000002)
+θᵛ = rand(length(ϕ(ones(5))))
+for iter = 1:20
+    θᵛ = solve_problem(θᵛ,gradient_step = 10^-20)
     println("V(x₀) = ",V(θᵛ,x₀))
     #Replace half of the samples
-    X_sample = [sample(X_sample,5); randx(5)]
+    X_sample = [sample(X_sample,1); randx(2)]
     ϕ_X_data = permutedims(batch(ϕ.(X_sample)))
 end
 
@@ -347,11 +354,15 @@ vfapolicy[:value] = vcat([V(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:
 vfapolicy[:utility] = vcat([R(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
 vfapolicy[:wealth] = vcat([v(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...)
 
-surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
+#titles3d("x", "y", "z")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:bid], title="bid")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:offer],  title="offer")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:utility], title="utility")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
+surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
+
+#surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ(θᵛ,x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+
 #
 # vfapolicy2 = DataFrame()
 # vfapolicy2[:q] = vcat([y for x in -2000:100:2000, y in -2000:100:2000]...)
@@ -373,3 +384,21 @@ surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
 # dfcash[:cash1] = [maxδᵇ(θᵛ,x₀+[0,x,0,-10000,0]) for x in 10:1:200]
 # plot(hcat(dfcash[:cash0],dfcash[:cash1]))
 #
+
+#
+# [((EΔᵇV(θᵛ,x₀+[-100x,0,0,x,0],δ)+EΔᵇR(x₀+[-100x,0,0,x,0],δ),δ,x),EΔᵇV(θᵛ,x₀+[-100x,0,0,x,0],δ),EΔᵇR(x₀+[-100x,0,0,x,0],δ),δ,x) for δ in 0.0001:0.0001:0.0020, x in 1878:1879]
+#
+#
+#
+# [(EΔᵇV(θᵛ,x₀+[-100x,0,0,x,0],δ)+EΔᵇR(x₀+[-100x,0,0,x,0],δ),EΔᵇR(x₀+[-100x,0,0,x,0],δ),δ,x) for δ in 0.0001:0.0001:0.0020, x in 1878:1879]
+
+# x2 = x₀+[-100*1879,0,0,1879,0]
+# x1 = x₀+[-100*1878,0,0,1878,0]
+# v(x1)>v(x2)
+# v(Δᵇ(x1,0.0001,0.0001))>v(Δᵇ(x2,0.0001,0.0001))
+# Δᵇ(x1,0.0001,0.0001),Δᵇ(x2,0.0001,0.0001)
+# v(Δᵇ(x2,0.0001,0.0001))-v(x2)
+
+##Value ingredients
+#Δᵃ(x,δᵃ,rᵃ) = [y(x) + (rᵃ>=δᵃ ? s(x)*(1+δᵃ) : 0), s(x) + s(x)*rᵃ, p(x) + s(x)*rᵃ, q(x) + (rᵃ>=δᵃ ? -1 : 0), h(x)]
+#Δᵇ(x,δᵇ,rᵇ) = [y(x) + (rᵇ>=δᵇ ? -s(x)*(1-δᵇ) : 0), s(x) - s(x)*rᵇ, p(x) - s(x)*rᵇ, q(x) + (rᵇ>=δᵇ ?  1 : 0), h(x)]
