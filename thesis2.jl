@@ -18,7 +18,7 @@ using Parameters
 using Simulator
 
 #Basis functions
-ϕ(x) = [1, v(x)/20000,-(q(x)+h(x))*v(x)/20000, -(v(x)^2)/1e6, p(x)]#[v(x), v(x)^2, p(x), p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
+ϕ(x) = [1, v(x)/20000,-(q(x)+h(x))*v(x)/20000, -(v(x)^2)/1e6, p(x), q(x)^2, h(x)^2, q(x)+h(x)]#[v(x), v(x)^2, p(x), p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
         #tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
 # ϕ(x) = [v(x), y(x), s(x), p(x), q(x), h(x), s(x)^2, p(x)^2, q(x)^2 + h(x)^2, log(s(x)),
 #                 s(x)*q(x), h(x)*s(x), h(x)*p(x), tanh(v(x)/1000), tanh((q(x)+h(x))/1000)]
@@ -283,7 +283,7 @@ end
 objective(θ,λ₁,λ₂,λ₃) = objective([θ;λ₁;λ₂;λ₃])
 ∇objective(θ,λ₁,λ₂,λ₃) = ForwardDiff.gradient(objective,[θ;λ₁;λ₂;λ₃])[1:length(θᵛ)]
 
-function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002,n_iter = 40)
+function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 10^-10, n_iter = 40)
     F = zeros(n_iter)
     θ = [θ₀ for x in 1:n_iter]
     for iter = 1:n_iter
@@ -304,7 +304,7 @@ function minimize_lagrangian(θ₀,λ₁,λ₂,λ₃;gradient_step = 0.000000002
 end
 
 function solve_problem(θ₀;
-    n_outer_iter = 10, n_inner_iter = 100, gradient_step = 0.00000000002, adjoint_step=0.025)
+    n_outer_iter = 20, n_inner_iter = 20, gradient_step = 10^-10, adjoint_step=10^-5)
     #Lagrange multipliers
     λ₁ = ones(5*length(X_sample))
     λ₂ = ones(10*length(X_sample))
@@ -336,7 +336,7 @@ function solve_problem(θ₀;
                 return θ[iter-1]
             elseif iter==n_outer_iter
                 return θ[iter]
-            elseif adjoint_step < 0.4
+            elseif adjoint_step < 0.05
                 adjoint_step *= 2
             end
         end
@@ -345,8 +345,8 @@ function solve_problem(θ₀;
 end
 
 θᵛ = rand(length(ϕ(ones(5))))
-for iter = 1:20
-    θᵛ = solve_problem(θᵛ,gradient_step = 10^-15)
+for iter = 1:10
+    θᵛ = solve_problem(θᵛ,gradient_step = 10^-10, adjoint_step=0.00025)
     println("V(x₀) = ",V(θᵛ,x₀))
     #Replace half of the samples
     X_sample = [sample(X_sample,1); randx(2)]
@@ -369,8 +369,27 @@ surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:utility], title="utility")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:wealth], title="wealth")
 surface(vfapolicy[:q],vfapolicy[:h],vfapolicy[:value], title="value")
 
-surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ([0.68,-0.9,-1.57],x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
-surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ([3100,22662,-1.86],x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+#maxδᵃR(x) = 0.0001*argmax([EΔᵃR(x,δ) for δ in 0.0001:0.0001:0.0020])
+#maxδᵇR(x) = 0.0001*argmax([EΔᵇR(x,δ) for δ in 0.0001:0.0001:0.0020])
+
+# function U(x)
+#     v(x) - s(x)^2*ϱ^2 * q(x)^2 - (s(x)-p(x))^2 * (ϱ^2 - κ^2) * h(x)^2
+# end
+
+# function U3(x)
+#     y(x) + (q(x)*s(x) + h(x)*(s(x)-p(x)))*exp(-(q(x)*s(x) + h(x)*(s(x)-p(x)))*10^-6) - 0.5*(q(x)^2 + h(x)^2) - (q(x)+h(x))^2
+# end
+#
+# contour(vfapolicy[:q],vfapolicy[:h],vcat([U3(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+#
+# contour(vfapolicy[:q],vfapolicy[:h],vcat([R(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
+
+
+#surface(vfapolicy[:q],vfapolicy[:h],vcat([EΔᵇV(θᵛ,x₀+[0,0,0,y,x],0.0001) for x in -2000:100:2000, y in -2000:100:2000]...))
+#surface(vfapolicy[:q],vfapolicy[:h],vcat([EΔᵇR(x₀+[0,0,0,y,x],0.0001) for x in -2000:100:2000, y in -2000:100:2000]...))
+#surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵇR(x₀+[-100*(x+y),0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...), title="bid using R only")
+
+#surface(vfapolicy[:q],vfapolicy[:h],vcat([maxδᵃ([3100,22662,-1.86],x₀+[0,0,0,y,x]) for x in -2000:100:2000, y in -2000:100:2000]...))
 
 
 vfapolicy2 = DataFrame()
