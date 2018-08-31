@@ -1,5 +1,5 @@
 module Simulator
-export randx, simulate
+export randx, simulate, randx2
 using Parameters
 using Distributions
 
@@ -10,6 +10,10 @@ function randx(n;support=false)
       support ? 0 : (2*rand()-1) * 2000,
       support ? 0 : (2*rand()-1) * 2000]
     for i in 1:n]
+end
+
+function randx2(n;support=false)
+    [[-q(x)*s(x)-h(x)*(s(x)-p(x)),s(x),p(x),q(x),h(x)] for x in randx(n,support=support)]
 end
 
 function simulate(x₀;N=1000,T=1)

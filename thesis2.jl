@@ -16,15 +16,27 @@ using Parameters
 using Simulator
 
 #Basis functions
-ϕ(x) = [1, 1e-5*v(x),
+ϕ(x) = [v(x),
+        1e-17*v(x)^3,
+        1e-11*(q(x)+h(x))^3,
         2.5e-9*(q(x)+h(x))*v(x),
         2.5e-3*s(x),
         1e-2*(s(x)-p(x)),
-        #0.5e-3*(q(x)-h(x)),
         1e-5*q(x)*h(x),
         0.5e-3*(q(x)+h(x)),
         1e-7*(q(x)+h(x))^2,
         1e-7*(q(x)^2 + h(x)^2)]
+
+# ϕ(x) = [1e-5*v(x),
+#         1e-17*v(x)^3,
+#         1e-11*(q(x)+h(x))^3,
+#         2.5e-9*(q(x)+h(x))*v(x),
+#         2.5e-3*s(x),
+#         1e-2*(s(x)-p(x)),
+#         1e-5*q(x)*h(x),
+#         0.5e-3*(q(x)+h(x)),
+#         1e-7*(q(x)+h(x))^2,
+#         1e-7*(q(x)^2 + h(x)^2)]
 ϕ(X::Array{Array{Float64,1},1}) = permutedims(Flux.batch(ϕ.(X)))
 
 #Function approximations
@@ -145,7 +157,7 @@ maxδᵃ(θ,x) = 0.0001*argmax([EΔᵃV(θ,x,δ)+EΔᵃR(x,δ) for δ in 0.0001:
 maxδᵇ(θ,x) = 0.0001*argmax([EΔᵇV(θ,x,δ)+EΔᵇR(x,δ) for δ in 0.0001:0.0001:0.0020])
 maxξ(θ,x)  = validξ(q(x),h(x))[argmax([V(θ,Γ(x,ξ)) for ξ in validξ(q(x),h(x))])]
 
-function total_reward(x₀;θᵛ=θᵛ,N=1000,T=1,Simulations=500,Safe=true)
+function total_reward(x₀;θᵛ=θᵛ,N=100,T=1,Simulations=10,Safe=true)
     Δt = 1/N
     reward = 0
     reward = @distributed (+) for i = 1:Simulations
@@ -206,10 +218,10 @@ end
 θᵇ = zeros(length(ϕ(ones(5))))
 θʷ = zeros(length(ϕ(ones(5))))
 
-V_estimate(θ,x) = max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x))) + v(x) #V(θ,x)
+V_estimate(θ,x) = max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x))) + V(θ,x) # max(R(x),...)
 #V_estimate(θ,x) = V(θ,x) + max(max([LV(θ,x,δᵃ,δᵇ) for δᵃ in 0.0001:0.0002:0.0016 for δᵇ in 0.0001:0.0002:0.0016]...), max([MV(θ,x,ξ) for ξ in validξ(q(x),h(x))]...))
 
- #max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
+#max(LV(θ,x,maxδᵃ(θ,x),maxδᵇ(θ,x)),MV(θ,x,maxξ(θ,x)))
 V_estimate(θ) = vcat([V_estimate(θ,x) for x in batch]...)
 V_bar(θ) = vcat([V(θ,x) for x in batch]...)
 maxδᵃ(θ) = mean([maxδᵃ(θ,x) for x in batch])
@@ -250,6 +262,29 @@ function fifth_order_condition(grad1, grad2)
     ]
 end
 
+function constraint_eigen(θ,x)
+  v = ∇Vx(θ,x)
+  r = ∇R(x)
+  A=[v[1]*r[1] v[1]*r[2] v[1]*r[3] v[1]*r[4] v[1]*r[5];
+  v[2]*r[1] v[2]*r[2] v[2]*r[3] v[2]*r[4] v[2]*r[5];
+  v[3]*r[1] v[3]*r[2] v[3]*r[3] v[3]*r[4] v[3]*r[5];
+  v[4]*r[1] v[4]*r[2] v[4]*r[3] v[4]*r[4] v[4]*r[5];
+  v[5]*r[1] v[5]*r[2] v[5]*r[3] v[5]*r[4] v[5]*r[5]]
+  eigen(0.5*(A+A')).values
+end
+
+function constraint_eigen(z)
+    θ = z[1:length(θᵛ)]
+    x = z[length(θ)+1:end]
+    sum(constraint_eigen(θ,x))
+end
+
+∇constrain_eigen(θ,x) = ForwardDiff.gradient(constraint_eigen,[θ;x])
+
+# function constraint(θ)
+#     vcat([constraint_eigen(θ,x) for x in batch]...)
+# end
+
 function V_constraint1(θ)
     vcat([∇Vx(θ,x) .* ∇R(x) for x in batch]...)
 end
@@ -274,20 +309,25 @@ function constraint(θ)
     [V_constraint1(θ);V_constraint2(θ);V_constraint3(θ);V_constraint4(θ);V_constraint5(θ)]
 end
 
+regularization_parameter = 1e5
+
 function objective_breakdown(z)
     θ = z[1:length(θᵛ)]
     ϵ = z[length(θ)+1:length(θ)+41*length(batch)]
     λ = z[length(θ)+1+41*length(batch):length(θ)+82*length(batch)]
     η = z[length(θ)+82*length(batch)+1]
-    sum((V_estimate(θ)-V_bar(θ)).^2) , sum(abs.(θ)), sum(θ.^2), - λ'*(constraint(θ) - ϵ.^2) , 0.5 * η * sum((constraint(θ) - ϵ.^2) .^2)
+    sum((V_estimate(θ)-V_bar(θ)).^2), regularization_parameter*sum(θ.^2) , - λ'*(constraint(θ) - ϵ.^2) , 0.5 * η * sum((constraint(θ) - ϵ.^2) .^2)
 end
+
+
+#+ regularization_parameter*sum(θ.^2)
 #Lagrangian objective
 function objective(z)
     θ = z[1:length(θᵛ)]
     ϵ = z[length(θ)+1:length(θ)+41*length(batch)]
     λ = z[length(θ)+1+41*length(batch):length(θ)+82*length(batch)]
     η = z[length(θ)+82*length(batch)+1]
-    sum((V_estimate(θ)-V_bar(θ)).^2) + 0.5sum(abs.(θ)) + 0.5sum(θ.^2) - λ'*(constraint(θ) - ϵ.^2) + 0.5 * η * sum((constraint(θ) - ϵ.^2) .^2)
+    sum((V_estimate(θ)-V_bar(θ)).^2)  - λ'*(constraint(θ) - ϵ.^2) + 0.5 * η * sum((constraint(θ) - ϵ.^2) .^2) #0.5sum(abs.(θ))
 end
 objective(θ,ϵ,λ,η) = objective([θ;ϵ;λ;η])
 ∇objective(θ,ϵ,λ,η) = ForwardDiff.gradient(objective,[θ;ϵ;λ;η])[1:length(θ)+41*length(batch)]
@@ -305,12 +345,14 @@ function minimize_lagrangian(θ₀,λ;gradient_step = 10^-10, penalty_parameter 
                 gradient_step /= 4
                 restarted = true
                 #restart the search
-                println("> F[$iter] is worse than F[$(iter-1)]: $(F[iter]) > $(F[iter-1]), gradient_step was $gradient_step")
-                println("> Restarting search")
+                if debug
+                    println(">> F[$iter] is worse than F[$(iter-1)]: $(F[iter]) > $(F[iter-1]), gradient_step was $gradient_step")
+                    println(">> Restarting search")
+                end
                 F[iter] = F[iter-1]
                 θ[iter] = θ[iter-1]
                 #return F[iter-1],θ[iter-1],ϵ[iter-1],gradient_step
-            elseif gradient_step < 10^-5 && !restarted
+            elseif gradient_step < 10^-6 && !restarted
                 gradient_step *= 2 #max(1,log(abs(F[iter]))/2)
             end
         end
@@ -322,14 +364,14 @@ function minimize_lagrangian(θ₀,λ;gradient_step = 10^-10, penalty_parameter 
             return F[iter],θ[iter],ϵ[iter],gradient_step
         end
         improvement[iter] = iter>1 ? max((F[iter-1]-F[iter])/abs(F[iter-1]), 0.0) : 0.0
-        if improvement[iter] < 0.01 && !restarted
+        if improvement[iter] < 0.01 && !restarted && gradient_step < 0.1
             gradient_step *= 10
         end
         if restarted && improvement[iter] < 2e-4 && improvement[iter] < improvement[iter-1]
             return F[iter],θ[iter],ϵ[iter],gradient_step
         end
         if debug
-            println("> Objective F(θ[$iter])): $(F[iter])", improvement[iter] > 0 ? ". Improvement: $(@sprintf("%.4f",100*improvement[iter]))%" : ". No improvemnt with gradient step $gradient_step.")
+            println(">> Objective F(θ[$iter])): $(F[iter])", improvement[iter] > 0 ? ". Improvement: $(@sprintf("%.4f",100*improvement[iter]))%" : ". No improvemnt with gradient step $gradient_step.")
         end
     end
 end
@@ -344,14 +386,14 @@ function solve_problem(θ₀;
     ϵ = [ones(length(λ)) for i in 1:n_outer_iter]
     η = penalty_parameter
     for iter = 1:n_outer_iter
-        println("Iteration $current_epoch.$iter:")
+        if debug println("> Iteration $current_epoch.$iter:") end
         F[iter], θ[iter], ϵ[iter], gradient_step = minimize_lagrangian(θ[iter],λ;gradient_step=gradient_step,penalty_parameter=η,n_iter=n_inner_iter,debug=debug)
         λ += adjoint_step * (constraint(θ[iter]) - ϵ[iter].^2)
         λ = [max(k,0) for k in λ]
-        println("Best F[$current_epoch.$iter] = $(F[iter])")
+        if debug println("> Best F[$current_epoch.$iter] = $(F[iter])") end
         if iter>1
             if F[iter] > F[iter-1]
-                println("F[$current_epoch.$iter] is worse than F[$current_epoch.$(iter-1)]: $(F[iter]) > $(F[iter-1])")
+                if debug println("> F[$current_epoch.$iter] is worse than F[$current_epoch.$(iter-1)]: $(F[iter]) > $(F[iter-1])") end
                 return θ[iter-1],gradient_step
             elseif iter==n_outer_iter
                 return θ[iter],gradient_step
@@ -367,52 +409,72 @@ end
 #and how much we want to learn from the new optimized function, given the new data
 learning_rate = 1.0
 
-master_batch = randx(100)
+grid_space = [[x₀+[1000,0,0,0,0]];[[0,100,0,2000,2000]];[[0,100,0,2000,-2000]];[[0,100,0,-2000,2000]];[[0,100,0,-2000,-2000]]]
+
+master_batch = grid_space #[x+[cash,price,premium,0,0] for x in grid_space for cash in [-10^5, 0, 10^5] for premium in [-1, -0.5, -0.2, 0, 0.2, 0.5, 1] for price in [-1, 0, 1]]
+#shuffle!(master_batch)
 master_batch_matrix = permutedims(Flux.batch(ϕ.(master_batch)))
 master_mean = [abs(mean(master_batch_matrix[:,i])) for i in 1:length(θᵛ)]
 
-batch = sample(master_batch,4,replace=false)
+batch_iter = 1
+batch = master_batch[1:1] #sample(master_batch,1) #[sample(master_batch,3,replace=false);[x₀]]
+V_batch =[V(θᵛ,x) for x in batch]
 ϕ_X = ϕ(batch)
 θᵛ = rand(length(ϕ(ones(5)))) - 0.5
 penalty_parameter = 1 #2e-7
 gradient_step = 10^-6
 θᵛhistory = [θᵛ]
+Vhistory = [V(θᵛ,x₀)]
 
 q_coords = vcat([q for q in -20:1:20, h in -20:1:20]...)
 h_coords = vcat([h for q in -20:1:20, h in -20:1:20]...)
-bids = vcat([maxδᵇ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
-offers = vcat([maxδᵃ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
+#bids = vcat([maxδᵇ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
+#offers = vcat([maxδᵃ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
 v_values = vcat([V(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
-surface(q_coords,h_coords,bids, title="Bid - Start")
-surface(q_coords,h_coords,offers, title="Offer - Start")
+#surface(q_coords,h_coords,bids, title="Bid - Start")
+#surface(q_coords,h_coords,offers, title="Offer - Start")
 surface(q_coords,h_coords,v_values, title="Value - Start")
 
-for iter = 1:20
+for iter = 1:100
     println("Epoch: $iter")
+    current_penalty_parameter = iter <= 10 ? penalty_parameter : 0.5*penalty_parameter
     θᵛ,gradient_step = solve_problem(θᵛ,
         gradient_step = gradient_step,
         adjoint_step = 0.001,
-        penalty_parameter = iter <= 10 ? penalty_parameter : 0.5*penalty_parameter,
-        n_outer_iter = iter==1 ? 10 : 5,
-        n_inner_iter = iter==1 ? 20 : 20,
+        penalty_parameter = current_penalty_parameter,
+        n_outer_iter = iter<5 ? 10 : 5,
+        n_inner_iter = iter<5 ? 20 : 10,
         current_epoch = iter,
-        debug = true)
-    current_learning_rate = iter == 1 ? 1 : learning_rate*(1 - sqrt(iter)/4.9)
-    global θᵛ = last(θᵛhistory)*(1-current_learning_rate) + θᵛ * current_learning_rate
+        debug = false)
+    #current_learning_rate = iter == 1 ? 1 : max(0.05,learning_rate*(1 - sqrt(iter)/4.9))
+    #global θᵛ = last(θᵛhistory)*(1-current_learning_rate) + θᵛ * current_learning_rate
     global θᵛhistory = [θᵛhistory..., θᵛ]
-    gradient_step /= 2
-    println("V(x₀) = ",V(θᵛ,x₀))
+    gradient_step /= 10
+    br1, br2, br3, br4 = objective_breakdown([θᵛ;ones(41*length(batch));ones(41*length(batch));current_penalty_parameter])
+    println("Objective breakdown = [$br1, $br2, $br3, $br4], gradient step: $(gradient_step)")
+    #regularization_parameter *= 0.9br1/br2
+    println("V(θ[$iter],x[$(batch[1])]) = ",V(θᵛ,batch[1]))#
+    global Vhistory = [Vhistory..., V(θᵛ,x₀)]
+    previous_V_batch = V_batch
+    V_batch = [V(θᵛ,x) for x in batch]
+    batch_objective = sum((V_batch - previous_V_batch) .^2)
+    println("Batch[$batch_iter] = $batch_objective")
     println("θ[$iter] = $θᵛ")
-    bids = vcat([maxδᵇ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
-    offers = vcat([maxδᵃ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
+    #bids = vcat([maxδᵇ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
+    #offers = vcat([maxδᵃ(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
     v_values = vcat([V(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -20:1:20, h in -20:1:20]...)
-    surface(q_coords,h_coords,bids, title="Bid - $iter")
-    surface(q_coords,h_coords,offers, title="Offer - $iter")
+    #surface(q_coords,h_coords,bids, title="Bid - $iter")
+    #surface(q_coords,h_coords,offers, title="Offer - $iter")
     surface(q_coords,h_coords,v_values, title="Value - $iter")
     #Replace half of the samples
-    batch = sample(master_batch,4,replace=false)
-    ϕ_X = ϕ(batch)
-    #penalty_parameter *= 1/log(1+sum(θᵛ.^2))
+    # if batch_objective< 1
+    #     println("Batch converged! Shifting to new batch.")
+    #     batch_iter += 1
+    #     global batch = master_batch[batch_iter:batch_iter] #sample(master_batch,3,replace=false)#;randx2(5);randx(2;support=true)]
+    #     #batch = sample(master_batch,4,replace=false)
+    #     global ϕ_X = ϕ(batch)
+    #     #penalty_parameter *= 1/log(1+sum(θᵛ.^2))
+    # end
 end
 
 function generate_scenario(θᵛ,f::Function, name::String, should_plot)
@@ -432,6 +494,7 @@ function generate_scenario(θᵛ,f::Function, name::String, should_plot)
         surface(scenario[:q],scenario[:h],scenario[:wealth], title="Wealth - $name")
         surface(scenario[:q],scenario[:h],scenario[:utility], title="Utility - $name")
         surface(scenario[:q],scenario[:h],scenario[:value], title="Value - $name")
+        contour(scenario[:q],scenario[:h],scenario[:value], title="Value - $name")
     end
     return scenario
 end
@@ -457,14 +520,20 @@ function generate_scenario2(θᵛ,f::Function, name::String, should_plot)
     return scenario
 end
 
-#generate_scenario2([-6459.41, 4817.17, 3239.14, 2914.76, 3803.45, -7771.34*0, 1182.54, 5644.38, -2739.32, -2762.34],(q,h) -> x₀+[-100*(q+h),0,0,q,h], "Scenario 1 (*)", true)
-
 #Same wealth scenario, different arrangements of position
 generate_scenario(θᵛ,(q,h) -> x₀+[-100*(q+h),0,0,q,h], "Scenario 1", true)
 #Zero cash scenarion, different arrangements of position
 generate_scenario(θᵛ,(q,h) -> x₀+[0,0,0,q,h], "Scenario 2", true)
 
+#generate_scenario(θᵛhistory[13],(q,h) -> x₀+[-100*(q+h),0,0,q,h], "Scenario 1 - converged", true)
+#generate_scenario(θᵛhistory[13],(q,h) -> x₀+[0,0,0,q,h], "Scenario 2 - converged", true)
 
+
+
+# q_coords2 = vcat([q for q in -2000:100:2000, h in -2000:100:2000]...)
+# h_coords2 = vcat([h for q in -2000:100:2000, h in -2000:100:2000]...)
+# v_values2 = vcat([V(θᵛ,x₀+[-100*(q+h),0,0,q,h]) for q in -2000:100:2000, h in -2000:100:2000]...)
+# surface(q_coords2,h_coords2,v_values2, title="V2")
 
 #random_direction = vcat(randx(1)...)
 # random_x = sample(batch)

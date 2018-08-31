@@ -38,7 +38,7 @@ v(x) =  y(x) + q(x)*s(x) + h(x)*(s(x)-p(x))
 # function R(x)
 #     y(x) + (q(x)*s(x) + h(x)*(s(x)-p(x)))*exp(-(q(x)*s(x) + h(x)*(s(x)-p(x)))*10^-6) - 0.5*(q(x)^2 + h(x)^2) - (q(x)+h(x))^2
 # end
-# function U(x)
+# function R(x)
 #     y(x) + (q(x)*s(x) + h(x)*(s(x)-p(x)))*exp(-(q(x)*s(x) +
 #     h(x)*(s(x)-p(x)))*10^-6) + 0.75*10^-6*(v(x)*10^-1)^3 - 0.5*(q(x)^2 + h(x)^2) - (q(x)+h(x))^2
 # end
